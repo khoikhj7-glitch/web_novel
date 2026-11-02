@@ -1,0 +1,24 @@
+node_modules/
+.next/
+dist/
+/build/
+.env
+*.log
+.DS_Store
+Thumbs.db
+postgres_data/
+/logs/
+uploads/manga/
+/exports/
+catalog/exports/
+backups/
+scripts/__pycache__/
+__pycache__/
+.build-stamp.json
+
+# Go binaries from a local `go build`
+services/*/*.exe
+.ua/intermediate/
+.ua/.trash-*/
+
+.tunnel-url

@@ -1,0 +1,648 @@
+services:
+  # ============================================================================
+  # 1. Database Service: PostgreSQL 16
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: novel_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 24)}
+      POSTGRES_DB: ${POSTGRES_DB:-novel_platform}
+    ports:
+      # Loopback only: the database must never be reachable from the LAN/Internet
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/database.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # TCP, not the socket: during first-run init a temporary server answers on the socket only, then restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-novel_platform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data
+
+  # ============================================================================
+  # 1b. Search Service: Elasticsearch (story search, optional).
+  #     Single node, password required (user `elastic`, ELASTIC_PASSWORD; plain HTTP is fine
+  #     inside the Docker network), reachable only on the Docker network and 127.0.0.1.
+  #     The password is fixed when the volume first starts with security on, like Postgres. Tuned for a small index on a small box:
+  #     256 MB heap, ML/geoip/disk-watermark/log-indexing off, hard container cap.
+  #     If it is down, the backend falls back to SQL ILIKE.
+  # ============================================================================
+  search:
+    image: elasticsearch:9.5.5
+    container_name: novel_search
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"
+      xpack.security.transport.ssl.enabled: "false" # single node: no transport traffic
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:?Set ELASTIC_PASSWORD in .env}
+      xpack.ml.enabled: "false"
+      ingest.geoip.downloader.enabled: "false"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+      cluster.deprecation_indexing.enabled: "false" # no internal log/history indices
+      indices.lifecycle.history_index_enabled: "false"
+      node.processors: 2 # sizes thread pools; each thread costs stack + buffers
+      # Heap: raise -Xms/-Xmx together (e.g. 512m) once the catalogue grows past ~50k stories.
+      # Direct memory / JIT code cache default to much more than a tiny index needs.
+      # No bootstrap.memory_lock: it pins every reserved page and roughly triples resident RAM.
+      ES_JAVA_OPTS: -Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ReservedCodeCacheSize=64m
+    mem_limit: 768m
+    ports:
+      - "127.0.0.1:${SEARCH_PORT:-9201}:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs -u \"elastic:$$ELASTIC_PASSWORD\" 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=2s' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+    networks:
+      - data
+
+  # ============================================================================
+  # 0. Gateway: nginx, the ONLY public entry point (port 3000 on the host).
+  #    Real client IP, rate limits, connection caps, slow-client timeouts, image cache.
+  # ============================================================================
+  gateway:
+    image: nginx:1.31-alpine
+    container_name: novel_gateway
+    restart: unless-stopped
+    ports:
+      # Loopback only by default: the public way in is the Cloudflare tunnel. GATEWAY_BIND=0.0.0.0 opens it to the LAN.
+      - "${GATEWAY_BIND:-127.0.0.1}:${GATEWAY_PORT:-3000}:8080"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - gateway_cache:/var/cache/nginx
+    depends_on:
+      - frontend
+      - catalog
+      - identity # auth_request target for every API call
+      - workspace
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      nofile: 65536 # WebSockets: one per open browser tab, plus its upstream
+    networks:
+      - edge
+
+  # ============================================================================
+  # 1c. Message broker: RabbitMQ (notification queue). Management UI on localhost only.
+  # ============================================================================
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: novel_rabbitmq
+    restart: unless-stopped
+    hostname: novel-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-novel}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15673}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+    networks:
+      - data
+
+  # ============================================================================
+  # 1e. PgBouncer: connection pooler in front of Postgres for the API (transaction pooling).
+  #     Many backend copies x their pools share a small, fixed number of real DB connections.
+  #     Workers connect to Postgres directly (long batches, advisory locks).
+  # ============================================================================
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.26.0-p0
+    container_name: novel_pgbouncer
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 24)}@postgres:5432/${POSTGRES_DB:-novel_platform}
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_POOL_SIZE:-20}
+      MAX_DB_CONNECTIONS: ${PGBOUNCER_MAX_DB_CONN:-60}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data
+
+  # ============================================================================
+  # 1d. Redis: response cache, buffered view counters, shared rate-limit counters and the
+  #     Socket.IO pub/sub that lets several backend copies push realtime events.
+  #     Losing it is safe: the app falls back to direct DB writes / memory limits / polling.
+  # ============================================================================
+  redis:
+    image: redis:7.4-alpine
+    container_name: novel_redis
+    restart: unless-stopped
+    command: >
+      redis-server --requirepass ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    mem_limit: 384m
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data
+
+  # ============================================================================
+  # 2. catalog: stories, chapters, groups, views (Node.js / Express), formerly `backend` (Plan/catalog.md)
+  # ============================================================================
+  catalog:
+    # Local: built from source. A server may pull prebuilt images instead (IMAGE_REGISTRY / IMAGE_TAG)
+    image: ${IMAGE_REGISTRY:-local}/nmv-catalog:${IMAGE_TAG:-latest}
+    build:
+      context: ./catalog
+      dockerfile: Dockerfile
+    container_name: novel_catalog
+    restart: unless-stopped
+    ports:
+      # Loopback only (debugging). The site reaches the API through the frontend proxy on the Docker network.
+      - "127.0.0.1:${PORT:-5000}:5000"
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 24)}@pgbouncer:5432/${POSTGRES_DB:-novel_platform}?schema=public
+      CORS_ORIGIN: http://localhost:3000
+      # One key per receiving service (the gateway's X-User-* signature, X-Internal-Auth): see README "Khóa giữa các service"
+      USER_SIG_KEY_CATALOG: ${USER_SIG_KEY_CATALOG:?Set USER_SIG_KEY_CATALOG in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_CATALOG: ${INTERNAL_KEY_CATALOG:?Set INTERNAL_KEY_CATALOG in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_IDENTITY: ${INTERNAL_KEY_IDENTITY:?Set INTERNAL_KEY_IDENTITY in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_WORKSPACE: ${INTERNAL_KEY_WORKSPACE:?Set INTERNAL_KEY_WORKSPACE in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_MESSAGING: ${INTERNAL_KEY_MESSAGING:?Set INTERNAL_KEY_MESSAGING in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_COMMUNITY: ${INTERNAL_KEY_COMMUNITY:?Set INTERNAL_KEY_COMMUNITY in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_LIBRARY: ${INTERNAL_KEY_LIBRARY:?Set INTERNAL_KEY_LIBRARY in .env (openssl rand -hex 32)}
+      IDENTITY_INTERNAL_URL: http://identity:8080
+      WORKSPACE_INTERNAL_URL: http://workspace:8080
+      MESSAGING_INTERNAL_URL: http://messaging:8080
+      COMMUNITY_INTERNAL_URL: http://community:8080
+      LIBRARY_INTERNAL_URL: http://library:8080
+      ENABLE_DEMO_ACCOUNTS: ${ENABLE_DEMO_ACCOUNTS:-false}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-novel}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672
+      SEARCH_URL: http://search:9200
+      SEARCH_PASSWORD: ${ELASTIC_PASSWORD:?Set ELASTIC_PASSWORD in .env} # user elastic
+      SEARCH_INDEX: ${SEARCH_INDEX:-novel_stories}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
+      # Password reset / email verification mails. Empty SMTP_URL: the link is written to the backend log
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-NovelHub <no-reply@novelhub.local>}
+      SITE_URL: ${SITE_URL:-http://localhost:3000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-} # optional bot check on sign-up / forgot password (with NEXT_PUBLIC_TURNSTILE_SITE_KEY)
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started # the API still works (inline fallback) if the broker is down
+      search:
+        condition: service_started # search falls back to SQL ILIKE if this isn't ready yet
+      redis:
+        condition: service_started # cache/counters/realtime degrade gracefully without it
+      identity:
+        condition: service_started # read-through of accounts whose event is late
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      edge:
+        aliases: [backend] # old name, still resolves
+      data:
+        aliases: [backend]
+
+  # ============================================================================
+  # 2b. Queue worker: same image as the API, consumes notification jobs from RabbitMQ
+  #     and writes them to PostgreSQL. Scale with `docker compose up -d --scale worker=3`
+  #     (remove container_name first).
+  # ============================================================================
+  worker:
+    image: ${IMAGE_REGISTRY:-local}/nmv-catalog:${IMAGE_TAG:-latest}
+    build:
+      context: ./catalog
+      dockerfile: Dockerfile
+    container_name: novel_worker
+    command: ["node", "dist/worker.js"]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: worker # "service" field of its log lines
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 24)}@postgres:5432/${POSTGRES_DB:-novel_platform}?schema=public
+      USER_SIG_KEY_CATALOG: ${USER_SIG_KEY_CATALOG:?Set USER_SIG_KEY_CATALOG in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_CATALOG: ${INTERNAL_KEY_CATALOG:?Set INTERNAL_KEY_CATALOG in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_IDENTITY: ${INTERNAL_KEY_IDENTITY:?Set INTERNAL_KEY_IDENTITY in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_WORKSPACE: ${INTERNAL_KEY_WORKSPACE:?Set INTERNAL_KEY_WORKSPACE in .env (openssl rand -hex 32)}
+      IDENTITY_INTERNAL_URL: http://identity:8080
+      WORKSPACE_INTERNAL_URL: http://workspace:8080
+      INTERNAL_KEY_LIBRARY: ${INTERNAL_KEY_LIBRARY:?Set INTERNAL_KEY_LIBRARY in .env (openssl rand -hex 32)}
+      LIBRARY_INTERNAL_URL: http://library:8080 # recommender training data, purge of deleted stories
+      # 60-day purge of removed stories (services/storyPurge.ts): comments in community, the search index
+      INTERNAL_KEY_COMMUNITY: ${INTERNAL_KEY_COMMUNITY:?Set INTERNAL_KEY_COMMUNITY in .env (openssl rand -hex 32)}
+      COMMUNITY_INTERNAL_URL: http://community:8080
+      SEARCH_URL: http://search:9200
+      SEARCH_PASSWORD: ${ELASTIC_PASSWORD:?Set ELASTIC_PASSWORD in .env} # user elastic
+      SEARCH_INDEX: ${SEARCH_INDEX:-novel_stories}
+      REMOVED_PURGE_DAYS: ${REMOVED_PURGE_DAYS:-60}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-novel}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data
+
+  # ============================================================================
+  # 2c. media (TS): image uploads, resized images (/uploads ?w=), EPUB/PDF downloads (built in the same process,
+  #     EXPORT_CONCURRENCY at a time). Own database media_db; files in ./uploads and ./exports. See Plan/media.md.
+  # ============================================================================
+  media:
+    build:
+      context: ./services/media
+    image: ${IMAGE_REGISTRY:-local}/nmv-media:${IMAGE_TAG:-latest}
+    container_name: novel_media
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      MEDIA_DATABASE_URL: postgres://media:${MEDIA_DB_PASSWORD:?Set MEDIA_DB_PASSWORD in .env}@postgres:5432/media_db
+      CATALOG_INTERNAL_URL: http://catalog:5000
+      USER_SIG_KEY_MEDIA: ${USER_SIG_KEY_MEDIA:?Set USER_SIG_KEY_MEDIA in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_CATALOG: ${INTERNAL_KEY_CATALOG:?Set INTERNAL_KEY_CATALOG in .env (openssl rand -hex 32)}
+      EXPORT_CONCURRENCY: ${EXPORT_CONCURRENCY:-1}
+      EXPORT_KEEP_DAYS: ${EXPORT_KEEP_DAYS:-7}
+    volumes:
+      - ./uploads:/app/uploads
+      - ./exports:/app/exports # built EPUB/PDF files (served only by the download endpoint)
+      - image_cache:/app/.cache # resized copies of uploaded images (safe to delete)
+    mem_limit: ${MEDIA_MEMORY:-1g} # EPUB/PDF of a big manga
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+      - data
+
+  # ============================================================================
+  # 2e. db-init (one-shot): each service gets its own database + login role (postgres/provision.sh).
+  #     Runs on every `up`; services with a database start after it has finished.
+  # ============================================================================
+  db-init:
+    image: postgres:16-alpine
+    container_name: novel_db_init
+    restart: "no"
+    entrypoint: ["sh", "/provision.sh"]
+    environment:
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 24)}
+      POSTGRES_DB: ${POSTGRES_DB:-novel_platform}
+      SERVICE_DBS: identity workspace media messaging community library recommender
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:?Set IDENTITY_DB_PASSWORD in .env}
+      WORKSPACE_DB_PASSWORD: ${WORKSPACE_DB_PASSWORD:?Set WORKSPACE_DB_PASSWORD in .env}
+      MEDIA_DB_PASSWORD: ${MEDIA_DB_PASSWORD:?Set MEDIA_DB_PASSWORD in .env}
+      MESSAGING_DB_PASSWORD: ${MESSAGING_DB_PASSWORD:?Set MESSAGING_DB_PASSWORD in .env}
+      COMMUNITY_DB_PASSWORD: ${COMMUNITY_DB_PASSWORD:?Set COMMUNITY_DB_PASSWORD in .env}
+      LIBRARY_DB_PASSWORD: ${LIBRARY_DB_PASSWORD:?Set LIBRARY_DB_PASSWORD in .env}
+      RECOMMENDER_DB_PASSWORD: ${RECOMMENDER_DB_PASSWORD:?Set RECOMMENDER_DB_PASSWORD in .env}
+    volumes:
+      - ./postgres/provision.sh:/provision.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+
+  # ============================================================================
+  # 2f. identity (Go): accounts, passwords, sessions, site roles, account mail. Own database identity_db
+  #     (role identity, straight to Postgres: no PgBouncer pool per database yet). See Plan/identity.md.
+  # ============================================================================
+  identity:
+    build:
+      context: ./services/identity
+    image: ${IMAGE_REGISTRY:-local}/nmv-identity:${IMAGE_TAG:-latest}
+    container_name: novel_identity
+    restart: unless-stopped
+    environment:
+      IDENTITY_DATABASE_URL: postgres://identity:${IDENTITY_DB_PASSWORD:?Set IDENTITY_DB_PASSWORD in .env}@postgres:5432/identity_db
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-novel}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672
+      IDENTITY_JWT_SECRET: ${IDENTITY_JWT_SECRET:?Set IDENTITY_JWT_SECRET in .env (openssl rand -hex 32)}
+      USER_SIG_KEY_CATALOG: ${USER_SIG_KEY_CATALOG:?Set USER_SIG_KEY_CATALOG in .env (openssl rand -hex 32)}
+      USER_SIG_KEY_WORKSPACE: ${USER_SIG_KEY_WORKSPACE:?Set USER_SIG_KEY_WORKSPACE in .env (openssl rand -hex 32)}
+      USER_SIG_KEY_MEDIA: ${USER_SIG_KEY_MEDIA:?Set USER_SIG_KEY_MEDIA in .env (openssl rand -hex 32)}
+      USER_SIG_KEY_MESSAGING: ${USER_SIG_KEY_MESSAGING:?Set USER_SIG_KEY_MESSAGING in .env (openssl rand -hex 32)}
+      USER_SIG_KEY_COMMUNITY: ${USER_SIG_KEY_COMMUNITY:?Set USER_SIG_KEY_COMMUNITY in .env (openssl rand -hex 32)}
+      USER_SIG_KEY_LIBRARY: ${USER_SIG_KEY_LIBRARY:?Set USER_SIG_KEY_LIBRARY in .env (openssl rand -hex 32)}
+      USER_SIG_KEY_RECOMMENDER: ${USER_SIG_KEY_RECOMMENDER:?Set USER_SIG_KEY_RECOMMENDER in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_IDENTITY: ${INTERNAL_KEY_IDENTITY:?Set INTERNAL_KEY_IDENTITY in .env (openssl rand -hex 32)}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-NovelHub <no-reply@novelhub.local>}
+      SITE_URL: ${SITE_URL:-http://localhost:3000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-} # optional bot check on sign-up / forgot password (with NEXT_PUBLIC_TURNSTILE_SITE_KEY)
+    mem_limit: 128m
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started # cache only; revocation falls back to the database
+      rabbitmq:
+        condition: service_started # events wait in the outbox until the broker is back
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+      - data
+
+  # ============================================================================
+  # 2g. workspace (Go): chapter versions (later drafts, proposals, tasks). Own database workspace_db.
+  #     Chapter content always comes through the backend (it sanitizes HTML) on /internal; history, compare
+  #     and rewind are public on /api/ws/*. See Plan/chapter-workspace.md.
+  # ============================================================================
+  workspace:
+    build:
+      context: ./services/workspace
+    image: ${IMAGE_REGISTRY:-local}/nmv-workspace:${IMAGE_TAG:-latest}
+    container_name: novel_workspace
+    restart: unless-stopped
+    environment:
+      WORKSPACE_DATABASE_URL: postgres://workspace:${WORKSPACE_DB_PASSWORD:?Set WORKSPACE_DB_PASSWORD in .env}@postgres:5432/workspace_db
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-novel}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672
+      USER_SIG_KEY_WORKSPACE: ${USER_SIG_KEY_WORKSPACE:?Set USER_SIG_KEY_WORKSPACE in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_WORKSPACE: ${INTERNAL_KEY_WORKSPACE:?Set INTERNAL_KEY_WORKSPACE in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_CATALOG: ${INTERNAL_KEY_CATALOG:?Set INTERNAL_KEY_CATALOG in .env (openssl rand -hex 32)}
+      CATALOG_INTERNAL_URL: http://catalog:5000
+    mem_limit: 128m
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_started # events wait in the outbox until the broker is back
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+      - data
+
+  # ============================================================================
+  # 2h. messaging (Go): browsers' WebSockets for realtime pings (published on Redis rt:events by any process).
+  #     Direct messages, group chat, notifications (own database messaging_db; consumes novel.notifications). See Plan/messaging.md.
+  # ============================================================================
+  messaging:
+    build:
+      context: ./services/messaging
+    image: ${IMAGE_REGISTRY:-local}/nmv-messaging:${IMAGE_TAG:-latest}
+    container_name: novel_messaging
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
+      USER_SIG_KEY_MESSAGING: ${USER_SIG_KEY_MESSAGING:?Set USER_SIG_KEY_MESSAGING in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_MESSAGING: ${INTERNAL_KEY_MESSAGING:?Set INTERNAL_KEY_MESSAGING in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_CATALOG: ${INTERNAL_KEY_CATALOG:?Set INTERNAL_KEY_CATALOG in .env (openssl rand -hex 32)}
+      MESSAGING_DATABASE_URL: postgres://messaging:${MESSAGING_DB_PASSWORD:?Set MESSAGING_DB_PASSWORD in .env}@postgres:5432/messaging_db
+      CATALOG_INTERNAL_URL: http://catalog:5000
+      INTERNAL_KEY_LIBRARY: ${INTERNAL_KEY_LIBRARY:?Set INTERNAL_KEY_LIBRARY in .env (openssl rand -hex 32)}
+      LIBRARY_INTERNAL_URL: http://library:8080 # who follows a story
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-novel}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672 # novel.notifications jobs
+    ulimits:
+      nofile: 65536 # one per open socket
+    mem_limit: ${MESSAGING_MEMORY:-768m} # ~40-44 KB per open socket (10k: 441 MB, 30k: 1.28 GB measured): ~15k sockets; 30k needs 1.5g
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+      - data
+
+  # ============================================================================
+  # 2i. community (TS): Fandom posts, comments (stories, chapters, posts), reactions, reports, removed content.
+  #     Own database community_db; names/stories asked from the backend. See Plan/community.md.
+  # ============================================================================
+  community:
+    build:
+      context: ./services/community
+    image: ${IMAGE_REGISTRY:-local}/nmv-community:${IMAGE_TAG:-latest}
+    container_name: novel_community
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      COMMUNITY_DATABASE_URL: postgres://community:${COMMUNITY_DB_PASSWORD:?Set COMMUNITY_DB_PASSWORD in .env}@postgres:5432/community_db
+      CATALOG_INTERNAL_URL: http://catalog:5000
+      MESSAGING_INTERNAL_URL: http://messaging:8080
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-novel}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672
+      USER_SIG_KEY_COMMUNITY: ${USER_SIG_KEY_COMMUNITY:?Set USER_SIG_KEY_COMMUNITY in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_COMMUNITY: ${INTERNAL_KEY_COMMUNITY:?Set INTERNAL_KEY_COMMUNITY in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_CATALOG: ${INTERNAL_KEY_CATALOG:?Set INTERNAL_KEY_CATALOG in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_MESSAGING: ${INTERNAL_KEY_MESSAGING:?Set INTERNAL_KEY_MESSAGING in .env (openssl rand -hex 32)}
+    mem_limit: ${COMMUNITY_MEMORY:-256m}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+      - data
+
+  # ============================================================================
+  # 2j. library (Go): reading history, follows, line bookmarks, albums. Own database library_db with read copies
+  #     of the backend's stories/chapters (synced by updated_at). See Plan/library.md.
+  # ============================================================================
+  library:
+    build:
+      context: ./services/library
+    image: ${IMAGE_REGISTRY:-local}/nmv-library:${IMAGE_TAG:-latest}
+    container_name: novel_library
+    restart: unless-stopped
+    environment:
+      LIBRARY_DATABASE_URL: postgres://library:${LIBRARY_DB_PASSWORD:?Set LIBRARY_DB_PASSWORD in .env}@postgres:5432/library_db
+      CATALOG_INTERNAL_URL: http://catalog:5000
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-novel}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672
+      USER_SIG_KEY_LIBRARY: ${USER_SIG_KEY_LIBRARY:?Set USER_SIG_KEY_LIBRARY in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_LIBRARY: ${INTERNAL_KEY_LIBRARY:?Set INTERNAL_KEY_LIBRARY in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_CATALOG: ${INTERNAL_KEY_CATALOG:?Set INTERNAL_KEY_CATALOG in .env (openssl rand -hex 32)}
+    mem_limit: ${LIBRARY_MEMORY:-128m}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+      - data
+
+  # ============================================================================
+  # 2k. recommender (Python): "Đề xuất cho bạn", "Truyện liên quan". Own database recommender_db fed by events
+  #     (catalog.*, library.*); training runs as its own process every REC_TRAIN_INTERVAL_MIN. See Plan/recommender.md.
+  # ============================================================================
+  recommender:
+    build:
+      context: ./services/recommender
+    image: ${IMAGE_REGISTRY:-local}/nmv-recommender:${IMAGE_TAG:-latest}
+    container_name: novel_recommender
+    restart: unless-stopped
+    environment:
+      RECOMMENDER_DATABASE_URL: postgres://recommender:${RECOMMENDER_DB_PASSWORD:?Set RECOMMENDER_DB_PASSWORD in .env}@postgres:5432/recommender_db
+      CATALOG_INTERNAL_URL: http://catalog:5000
+      LIBRARY_INTERNAL_URL: http://library:8080
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-novel}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672
+      USER_SIG_KEY_RECOMMENDER: ${USER_SIG_KEY_RECOMMENDER:?Set USER_SIG_KEY_RECOMMENDER in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_CATALOG: ${INTERNAL_KEY_CATALOG:?Set INTERNAL_KEY_CATALOG in .env (openssl rand -hex 32)}
+      INTERNAL_KEY_LIBRARY: ${INTERNAL_KEY_LIBRARY:?Set INTERNAL_KEY_LIBRARY in .env (openssl rand -hex 32)}
+      REC_TRAIN_INTERVAL_MIN: ${REC_TRAIN_INTERVAL_MIN:-30}
+    mem_limit: ${RECOMMENDER_MEMORY:-512m}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+      - data
+
+  # ============================================================================
+  # HTTPS without opening ports: Cloudflare Tunnel (`docker compose --profile tunnel up -d`).
+  # Create a tunnel in the Cloudflare dashboard pointing at http://gateway:8080 and put its token in .env.
+  # ============================================================================
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.0
+    container_name: novel_cloudflared
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - gateway
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+    profiles:
+      - tunnel
+
+  # Quick tunnel: no token, no account. launch.py starts it and prints the https://*.trycloudflare.com link.
+  quicktunnel:
+    image: cloudflare/cloudflared:2026.10.0
+    container_name: novel_quicktunnel
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--url", "http://gateway:8080"]
+    depends_on:
+      - gateway
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+    profiles:
+      - quicktunnel
+
+  # ============================================================================
+  # 3. Frontend Service (Next.js 15 App Router)
+  # ============================================================================
+  frontend:
+    image: ${IMAGE_REGISTRY:-local}/nmv-frontend:${IMAGE_TAG:-latest}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: /api/v1
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+    container_name: novel_frontend
+    restart: unless-stopped
+    # Not published: visitors reach it through the gateway (nginx) only
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_URL: http://catalog:5000/api/v1
+    volumes:
+      - ./uploads:/app/public/uploads
+    depends_on:
+      - catalog
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+
+  # ============================================================================
+  # Optional: pgAdmin 4 for Database Web GUI Management
+  # ============================================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: novel_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@novelhub.vn}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?Set PGADMIN_DEFAULT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${PGADMIN_PORT:-5050}:80" # loopback only, like the other admin ports
+    depends_on:
+      - postgres
+    networks:
+      - data
+    profiles:
+      - tools
+
+volumes:
+  postgres_data:
+    driver: local
+  es_data:
+    driver: local
+  image_cache:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  gateway_cache:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  # Public-facing tier: only what serves browsers (gateway -> frontend/catalog)
+  edge:
+    driver: bridge
+  # Data tier: databases, queues, cache, workers. gateway and frontend are NOT on it, so a bug in
+  # either can't reach Postgres/Redis/RabbitMQ directly. Only catalog sits on both.
+  data:
+    driver: bridge

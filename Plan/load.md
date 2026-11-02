@@ -1,0 +1,60 @@
+# Giảm tải: ít request hơn, hạn mức ghi theo người dùng
+
+Nghiên cứu 2026-10-12 (đo bằng Chrome, Performance API):
+- MangaDex: ~12 API/trang; tab trong trang tải lần đầu rồi giữ; quay lại tab trình duyệt / ngồi yên: 0 request; server ~5 req/s/IP, request dồn bị 503.
+- Webtoons: tập 42 ảnh, mở ra tải 2, tải trước 2–3 màn hình khi cuộn.
+- Royal Road: cả chương trong 1 HTML 37KB, không API, không tải trước chương sau.
+- GitHub: hạn mức ghi theo người dùng (~80/phút, 500/giờ), khóa nút khi đang xử lý, việc nặng chạy nền.
+- NovelHub (trước khi sửa): trang truyện 27 request (~12 API + ~15 Next.js tự tải trước link), truyện và lịch sử bị gọi 2 lần,
+  `/api/identity/me` + `/api/v1/auth/me`; trình đọc 7 API + 9 tải trước; bộ lọc Khám phá 6 lần bấm = 4 request;
+  quay lại tab / ngồi yên: 0 (tốt). Service workspace không có hạn mức theo người dùng.
+
+Mỗi mục một nhánh + PR. Đo lại sau mỗi mục và ghi số.
+
+## A. Ít request hơn
+- [x] A1. Link chỉ tải trước khi rê chuột/chạm (`components/common/Link.tsx` thay `next/link`; `check-nav.sh` chặn import thẳng).
+- [x] A2. Bỏ request trùng. Quét 9 trang: chỉ trang truyện (truyện ×2, lịch sử ×2) và Khám phá (explore ×2) bị trùng, sửa tận gốc nên không cần `lib/fetchCache`.
+  Hai API `me` là của hai service (tài khoản / hồ sơ): giữ cả hai, gọi song song.
+- [x] A3. Tab tải lần đầu rồi giữ: `lib/memo.ts` (giữ 60 s, `forget` sau khi đổi) cho kệ truyện + phiên bản ở /ws; tab Chat của nhóm
+  chỉ tải lại khi có tin mới trong lúc ở tab khác; tab Quản lý vai trò tải một lần. (Trang truyện không có tab; ws/de-xuat không tải khi đổi tab.)
+- [x] A4. Khám phá: một request cho mỗi đợt thay đổi (chờ 150 ms; hủy request cũ đã có).
+- [x] A5. Cache Redis phần chung của trang truyện + chương (60 s, `cachedPublic`); ghi thành công ở `/api/v1`, phiên bản từ
+  workspace, xóa hẳn truyện tăng `pubcache:gen` trước khi trả lời → người sửa thấy ngay. Đã thử: sửa tóm tắt, đọc lại ngay = bản mới.
+- [x] A6. 429: catalog đã có `Retry-After`; thêm cho nginx (`@too_many`, 2 s) và community. `RateLimitNotice` (layout) bắt mọi 429 cùng
+  origin: thông báo đếm ngược; GET chờ ≤ 5 s thì gửi lại 1 lần, thao tác ghi không bao giờ tự gửi lại.
+
+## C. Theo yêu cầu thêm (2026-10-12)
+- [x] C1. Khám phá: nút "Tìm" như MangaDex (đo MangaDex: bấm lọc 3 lần = 0 request, bấm Search = 1). Của mình sau sửa: 4 lần bấm lọc = 0, "Tìm" = 1.
+- [x] C2. Trình đọc truyện tranh: khung chờ ảnh đã biết kích thước cao đúng ảnh thật (lát 700×3 trước 240 px → 3 px), không giật.
+- [x] C3. media `?w=`: bản WebP nặng hơn ảnh gốc thì trả ảnh gốc (trang 820 px: 56 KB → 38 KB). Đã xóa cache ảnh của nginx (bản cũ HIT 1 năm).
+- Không tải trước cả chương như MangaDex (chủ dự án không cho, để tránh quá tải); giữ lazy + 2 trang kế ở chế độ lật trang.
+- Kiểm tra truyện tranh crawler: 1956 ảnh (trang + bìa) đều có file; 3 nguồn mở đúng; 28 bìa Khám phá tải đủ; 8 ảnh < 2 KB là lát mỏng thật.
+
+- [x] C4. Nút "Tìm": kết quả hiện sau tối thiểu 1 s, nút khóa lúc chờ (đo: server 17 ms, hiện sau 1034 ms; bấm thêm 2 lần = vẫn 1 request).
+- [x] C5. Che chắn Elasticsearch: cache id theo từ khóa 60 s (Redis), gộp truy vấn trùng, tối đa 4 đồng thời (chờ > 1 s → SQL),
+  cầu dao 30 s, `timeout: 1s` trong ES. Đo: 20 tổ hợp lọc/trang/sắp xếp cùng từ khóa = 1 truy vấn ES; 40 từ khóa cùng lúc: 200 hết,
+  chậm nhất 231 ms; tắt ES: lần đầu 3 s, sau đó 15–21 ms bằng SQL.
+
+- [x] C6. Ô tìm của Khám phá tìm trong bộ lọc đã áp dụng (đã đúng từ trước); giờ ghi rõ "Tìm trong N bộ lọc đang áp dụng" và khi
+  không có kết quả có nút "Tìm … trên toàn bộ truyện".
+
+## B. Hạn mức ghi (kiểu GitHub)
+- [x] B1. Service workspace (`quota.go`): theo người dùng, trong bộ nhớ (1 container; ghi chú `shortcut:`): ghi thường 60/phút + 600/giờ;
+  dùng bản cũ / kéo bản mới / nhận đề xuất / lấy lại nháp 10/phút + 100/giờ; sao chép nháp 20/giờ; khóa nháp (nhịp 30 s) không tính.
+  Đăng / lên lịch đi qua catalog (`/internal`) → B2. 429 + `Retry-After`.
+- [x] B2. Catalog: ghi theo tài khoản (khách theo IP) 120/phút + 600/giờ (tự lưu nháp `PUT /drafts/:id` không tính vào giờ).
+  Đã thử: tài khoản A lần 121 → 429 (Retry-After 59), tài khoản B cùng IP vẫn ghi.
+- [x] B3. Khóa nút khi đang gửi: rà mọi nút ghi ở ws / đăng truyện; thêm cho Nhận lại nháp, Tạo bản sao (DraftCard), và 6 thao tác nháp ở
+  /dang-chuong (`once`: sao chép, gửi chủ nháp, từ chối bản sao, hủy hẹn, rút đề xuất, bỏ nháp). Đăng / gửi đề xuất / TaskCard đã có.
+- [x] B4. UI 429: đếm ngược, không tự thử lại thao tác ghi (cùng PR với A6; khóa nút khi đang gửi: B3).
+- [x] B5. Đã có sẵn: khóa nháp chỉ gia hạn khi đã gõ trong 2 phút gần nhất (tab ẩn = không gõ = ngừng gửi, khóa hết hạn sau 2 phút). Không sửa.
+
+## Kết quả đo
+| Bước | Trang truyện | Trình đọc | Ghi chú |
+|---|---|---|---|
+| Trước | 27 request (12 API) | 16 (7 API) | |
+| A1 | 11 (11 API, 0 tải trước) | | rê chuột lên chương: tải trước, bấm → 41 ms |
+| A3 | | | /ws: đổi truyện A→B→A→B: 1 request (trước 4); mở chương qua lại 4 lần: 1; tab Chat mở 3 lần: 1 |
+| A5 | | | DB: trang truyện 7 → 0 truy vấn khi cache trúng (+ quyền/theo dõi nếu đăng nhập), chương 6 → 0 |
+| A6 | | | 150 GET dồn: 125 qua (có lần gửi lại sau 2 s), 25 vẫn 429; thông báo đếm ngược hiện |
+| A2+A4 | 10 API, 0 trùng | 7 API | Khám phá: mở 1 request (trước 2); 6 lần bấm lọc → 1 request (trước 4) |

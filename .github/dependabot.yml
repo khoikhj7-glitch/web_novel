@@ -1,0 +1,56 @@
+# Weekly dependency updates. Only patch/minor versions, grouped into one PR per folder/ecosystem.
+# No CI (GitHub Actions removed 2026-10-12): check a PR locally (typecheck + tests) before merging it.
+# Major versions (Postgres, Prisma, Next, Tailwind, Node...) need code changes and a plan: they are
+# ignored here and upgraded by hand on their own branch (see CLAUDE.md).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /catalog
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: docker
+    directory: /catalog
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]

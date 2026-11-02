@@ -1,0 +1,509 @@
+/* All families below include the Vietnamese subset (served automatically via unicode-range) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Quicksand:wght@500;600;700&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;0,7..72,700;1,7..72,400&family=Noto+Serif:ital,wght@0,400;0,700;1,400&family=Merriweather:ital,wght@0,400;0,700;1,400&family=Roboto:ital,wght@0,400;0,700;1,400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Palette variables (--c-*) are generated in tailwind.config.ts. These are the extra design tokens. */
+:root, .light {
+  --glass-bg: rgb(255 255 255 / 0.72);
+  --glass-bg-strong: rgb(255 255 255 / 0.82);
+  --glass-border: rgb(24 24 27 / 0.035);
+  --glass-edge: rgb(24 24 27 / 0.08);
+  --glass-shadow: 0 8px 30px -14px rgb(15 50 100 / 0.16), 0 1px 3px rgb(15 50 100 / 0.05);
+  --glass-highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.9);
+  --aura-1: rgb(43 143 240 / 0.10);
+  --aura-2: rgb(34 211 238 / 0.08);
+  --aura-3: rgb(99 102 241 / 0.05);
+  --scroll-thumb: rgb(24 24 27 / 0.16);
+}
+.dark {
+  --glass-bg: rgb(30 30 30 / 0.6);
+  --glass-bg-strong: rgb(24 24 24 / 0.84);
+  --glass-border: rgb(255 255 255 / 0.04);
+  --glass-edge: rgb(255 255 255 / 0.06);
+  --glass-shadow: 0 16px 50px -16px rgb(0 0 0 / 0.7);
+  --glass-highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.06);
+  --aura-1: rgb(43 143 240 / 0.10);
+  --aura-2: rgb(34 211 238 / 0.05);
+  --aura-3: rgb(99 102 241 / 0.04);
+  --scroll-thumb: rgb(255 255 255 / 0.14);
+}
+
+html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
+
+/* Mobile bottom nav: 64px under lg, none from lg; BottomNav sets html.no-bnav where it is hidden (reader, /ws) */
+:root { --bottom-nav-h: 0px; }
+@media (max-width: 1023.98px) {
+  :root { --bottom-nav-h: 64px; }
+  :root.no-bnav { --bottom-nav-h: 0px; }
+  body { padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom)); }
+  /* safety net only: the real causes of sideways overflow are fixed at the source */
+  html, body { overflow-x: clip; }
+}
+/* floating things (toast, miniplayer, reader bar): 12px above the nav, or above the safe area from lg */
+.bottom-above-nav { bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom) + 12px); }
+.pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+@media (max-width: 639.98px) {
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]), select, textarea { font-size: 16px; }
+}
+/* lighter effects on phones */
+@media (max-width: 767.98px) {
+  body::before { animation: none; }
+  .glass-panel, .bg-glass, .glass-strong, .glass-photo {
+    backdrop-filter: blur(10px) saturate(150%);
+    -webkit-backdrop-filter: blur(10px) saturate(150%);
+  }
+}
+
+/* Full-screen scenic wallpaper, pinned while the page scrolls; the tint keeps text readable */
+html {
+  background:
+    linear-gradient(rgb(255 255 255 / 0.5), rgb(255 255 255 / 0.7)),
+    url('/backgrounds/pixel-city.png') center / cover no-repeat fixed,
+    rgb(var(--c-surface));
+}
+html.dark {
+  background:
+    linear-gradient(rgb(0 0 0 / 0.15), rgb(0 0 0 / 0.45)),
+    url('/backgrounds/night-sky.jpg') center / cover no-repeat fixed,
+    rgb(var(--c-surface));
+}
+body {
+  color: rgb(var(--c-white));
+  background: transparent;
+  font-family: 'Inter', sans-serif;
+  overflow-x: hidden;
+  transition: background-color 0.5s ease, color 0.5s ease;
+}
+
+/* Soft drifting colour aura behind everything so glass panels have something to blur */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -20vmax;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(38vmax 38vmax at 12% 8%, var(--aura-1), transparent 70%),
+    radial-gradient(34vmax 34vmax at 88% 22%, var(--aura-2), transparent 70%),
+    radial-gradient(40vmax 40vmax at 60% 92%, var(--aura-3), transparent 70%);
+  animation: nh-aura 28s ease-in-out infinite alternate;
+}
+@keyframes nh-aura {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  50% { transform: translate3d(3vmax, -2vmax, 0) rotate(8deg); }
+  100% { transform: translate3d(-2vmax, 2vmax, 0) rotate(-6deg); }
+}
+
+/* Theme switch: circular reveal (View Transitions API), falls back to a plain swap */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-new(root) { z-index: 2; }
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #2b8ff0; background-clip: padding-box; }
+.scrollbar-none { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
+
+@layer components {
+/* ---------- Glass ---------- */
+.glass-panel, .bg-glass {
+  background-color: var(--glass-bg);
+  backdrop-filter: blur(22px) saturate(170%);
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
+}
+.glass-panel { border: 1px solid var(--glass-border); }
+/* Pop-up menus (account, notifications) sit inside the frosted navbar; a blur nested in another blur
+   shows nothing, so they get a nearly solid surface to stay readable over any wallpaper */
+.glass-menu {
+  background-color: rgb(var(--c-surface-2) / 0.97);
+  border: 1px solid var(--glass-edge);
+  box-shadow: 0 24px 48px -16px rgb(0 0 0 / 0.55), var(--glass-highlight);
+}
+.glass-strong {
+  background-color: var(--glass-bg-strong);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
+}
+/* Frosted label sitting directly on a photo: always light-on-dark, whatever the theme */
+.glass-photo {
+  background: rgb(18 16 14 / 0.3);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  border: 1px solid rgb(255 255 255 / 0.18);
+  color: #fff;
+}
+
+}
+
+/* ---------- Image-first story tile ---------- */
+.tile {
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  isolation: isolate;
+  background: rgb(var(--c-surface-3));
+  box-shadow: 0 10px 24px -14px rgb(0 0 0 / 0.35);
+  transform: translateZ(0);
+  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.dark .tile { box-shadow: 0 14px 34px -14px rgb(0 0 0 / 0.85); }
+@media (hover: hover) { .tile:hover { box-shadow: 0 22px 40px -18px rgb(22 114 214 / 0.4); } }
+.tile__img { transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1), filter 0.6s ease; }
+@media (hover: hover) { .tile:hover .tile__img { transform: scale(1.08); } }
+.tile__shine {
+  position: absolute; inset: 0; pointer-events: none; z-index: 3; opacity: 0;
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgb(255 255 255 / 0.28), transparent 45%);
+  transition: opacity 0.4s ease;
+}
+@media (hover: hover) { .tile:hover .tile__shine { opacity: 1; } }
+.tile__reveal {
+  display: grid; grid-template-rows: 0fr; opacity: 0;
+  transition: grid-template-rows 0.55s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.4s ease;
+}
+.tile__reveal > * { overflow: hidden; }
+.tile:focus-within .tile__reveal { grid-template-rows: 1fr; opacity: 1; }
+@media (hover: hover) { .tile:hover .tile__reveal { grid-template-rows: 1fr; opacity: 1; } }
+
+/* ---------- Hero 3D carousel ---------- */
+.hero-stage { perspective: 2200px; perspective-origin: 50% 40%; }
+.hero-slide {
+  position: absolute; inset: 0;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  transition:
+    transform 1.15s cubic-bezier(0.7, 0, 0.2, 1),
+    opacity 1.15s cubic-bezier(0.7, 0, 0.2, 1),
+    filter 1.15s cubic-bezier(0.7, 0, 0.2, 1);
+  will-change: transform, opacity;
+}
+.hero-slide.is-active { transform: translate3d(0, 0, 0) rotateY(0deg); opacity: 1; z-index: 2; filter: none; }
+.hero-slide.is-left  { transform: translate3d(-62%, 0, -520px) rotateY(58deg); opacity: 0; z-index: 1; filter: blur(6px); pointer-events: none; }
+.hero-slide.is-right { transform: translate3d(62%, 0, -520px) rotateY(-58deg); opacity: 0; z-index: 1; filter: blur(6px); pointer-events: none; }
+.hero-slide.is-parked { transition: none; }
+/* depth layers inside a slide move at different speeds while it turns */
+.hero-layer-near { transform: translateZ(40px); transition: transform 1.15s cubic-bezier(0.7, 0, 0.2, 1); }
+.hero-slide:not(.is-active) .hero-layer-near { transform: translateZ(220px) translateX(var(--near-shift, 0)); }
+.hero-slide.is-left { --near-shift: 80px; }
+.hero-slide.is-right { --near-shift: -80px; }
+.hero-kenburns { animation: nh-kenburns 14s ease-in-out infinite alternate; }
+@keyframes nh-kenburns {
+  0% { transform: scale(1.04) translate3d(0, 0, 0); }
+  100% { transform: scale(1.16) translate3d(-2%, -2%, 0); }
+}
+.hero-progress { transform-origin: left center; animation: nh-progress linear forwards; }
+@keyframes nh-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.hero-paused .hero-progress { animation-play-state: paused; }
+
+/* Workspace (/ws): each category is a stream of water flowing behind its chapter tiles (put on a w-max row, so it spans the scroll width) */
+.ws-stream { position: relative; }
+.ws-stream::before { content: ''; position: absolute; inset: 50% 0 auto; height: 8px; margin-top: -4px; border-radius: 9999px; filter: blur(1.5px);
+  background: linear-gradient(90deg, rgb(56 189 248 / 0.25), rgb(56 189 248 / 0.85), rgb(129 140 248 / 0.45), rgb(56 189 248 / 0.85), rgb(56 189 248 / 0.25)) 0 0 / 50% 100% repeat-x;
+  animation: ws-flow 4s linear infinite; }
+@keyframes ws-flow { to { background-position: 100% 0; } }
+
+/* Text of a newly active slide rises in */
+.hero-slide .rise { opacity: 0; transform: translateY(18px); transition: opacity 0.7s ease, transform 0.9s cubic-bezier(0.22, 1, 0.36, 1); }
+.hero-slide.is-active .rise { opacity: 1; transform: none; }
+.hero-slide.is-active .rise-1 { transition-delay: 0.45s; }
+.hero-slide.is-active .rise-2 { transition-delay: 0.55s; }
+.hero-slide.is-active .rise-3 { transition-delay: 0.65s; }
+.hero-slide.is-active .rise-4 { transition-delay: 0.75s; }
+
+/* Scroll-in reveal */
+.reveal-up { opacity: 0; transform: translateY(26px); transition: opacity 0.8s ease, transform 0.9s cubic-bezier(0.22, 1, 0.36, 1); }
+.reveal-up.is-visible { opacity: 1; transform: none; }
+
+/* ---------- Rich text: editor (CKEditor 5) + rendered content ---------- */
+.novel-ck {
+  --ck-color-base-background: rgb(var(--c-surface-2));
+  --ck-color-base-foreground: rgb(var(--c-surface-3));
+  --ck-color-base-border: rgb(var(--c-white) / 0.12);
+  --ck-color-base-text: rgb(var(--c-gray-200));
+  --ck-color-text: rgb(var(--c-gray-200));
+  --ck-color-toolbar-background: rgb(var(--c-surface-3));
+  --ck-color-toolbar-border: rgb(var(--c-white) / 0.12);
+  --ck-color-panel-background: rgb(var(--c-surface-2));
+  --ck-color-panel-border: rgb(var(--c-white) / 0.12);
+  --ck-color-button-default-hover-background: rgb(var(--c-white) / 0.08);
+  --ck-color-button-default-active-background: rgb(var(--c-white) / 0.12);
+  --ck-color-button-on-background: rgba(43, 143, 240, 0.22);
+  --ck-color-button-on-hover-background: rgba(43, 143, 240, 0.32);
+  --ck-color-list-background: rgb(var(--c-surface-2));
+  --ck-color-list-button-hover-background: rgb(var(--c-white) / 0.08);
+  --ck-color-input-background: rgb(var(--c-surface-3));
+  --ck-color-input-border: rgb(var(--c-white) / 0.15);
+  --ck-color-input-text: rgb(var(--c-gray-200));
+  --ck-color-dropdown-panel-background: rgb(var(--c-surface-2));
+  --ck-color-focus-border: #2b8ff0;
+  --ck-border-radius: 12px;
+  font-size: 0.8rem;
+}
+.novel-ck .ck.ck-editor__editable_inline {
+  min-height: var(--novel-ck-min-height, 160px);
+  color: rgb(var(--c-gray-200));
+  background: rgb(var(--c-surface-2));
+  padding: 0.5rem 1rem;
+  line-height: 1.7;
+}
+.novel-ck .ck.ck-editor__editable_inline > :first-child { margin-top: 0.5rem; }
+.novel-ck .ck-placeholder::before { color: rgb(var(--c-gray-500)) !important; }
+
+.rich-content { line-height: 1.75; overflow-wrap: anywhere; }
+.rich-content > * + * { margin-top: 0.75em; }
+.rich-content h2 { font-size: 1.35em; font-weight: 800; color: rgb(var(--c-white)); }
+.rich-content h3 { font-size: 1.15em; font-weight: 700; color: rgb(var(--c-white)); }
+.rich-content h4 { font-size: 1em; font-weight: 700; color: rgb(var(--c-white)); }
+.rich-content strong, .rich-content b { font-weight: 700; color: rgb(var(--c-white)); }
+.rich-content em, .rich-content i { font-style: italic; }
+.rich-content u { text-decoration: underline; }
+.rich-content s, .rich-content strike { text-decoration: line-through; }
+.rich-content ul { list-style: disc; padding-left: 1.5em; }
+.rich-content ol { list-style: decimal; padding-left: 1.5em; }
+.rich-content li + li { margin-top: 0.25em; }
+.rich-content blockquote {
+  border-left: 3px solid rgba(43, 143, 240, 0.6);
+  padding: 0.25em 0 0.25em 1em;
+  color: rgb(var(--c-gray-300));
+  font-style: italic;
+}
+.rich-content a { color: rgb(var(--c-indigo-400)); text-decoration: underline; text-underline-offset: 2px; }
+.rich-content a:hover { color: rgb(var(--c-indigo-300)); }
+.rich-content hr { border: 0; border-top: 1px solid rgb(var(--c-white) / 0.15); margin: 1.25em 0; }
+
+.rich-content figure.image { margin: 1.25em auto; text-align: center; max-width: 100%; }
+.rich-content figure.image img { max-width: 100%; height: auto; margin: 0 auto; border-radius: 6px; display: block; }
+.rich-content figure.image_resized { max-width: 100%; }
+.rich-content figure.image figcaption { margin-top: 0.5em; font-size: 0.8em; color: rgb(var(--c-gray-400)); font-style: italic; }
+.rich-content figure.image-style-side { float: right; margin-left: 1.25em; max-width: 50%; }
+.novel-ck .ck-content .image img { border-radius: 6px; }
+
+/* ---------- Loading animations (BookLoader, NavigationProgress) ---------- */
+.nh-book { position: relative; width: 64px; height: 44px; perspective: 260px; }
+.nh-book--sm { width: 32px; height: 22px; perspective: 130px; }
+.nh-book__base {
+  position: absolute; inset: 0; border-radius: 6px;
+  background: linear-gradient(135deg, #1672d6, #06b6d4);
+  box-shadow: 0 6px 20px rgba(22, 114, 214, 0.4);
+}
+.nh-book__base::after { /* spine */
+  content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px;
+  background: rgba(0, 0, 0, 0.35); transform: translateX(-50%);
+}
+.nh-book__page {
+  position: absolute; top: 3px; bottom: 3px; left: 50%; width: calc(50% - 3px);
+  background: linear-gradient(90deg, #e5e7eb, #ffffff);
+  border-radius: 0 3px 3px 0; transform-origin: left center; transform: rotateY(0deg);
+  animation: nh-flip 1.8s ease-in-out infinite; backface-visibility: hidden;
+}
+.nh-book__page:nth-of-type(2) { animation-delay: 0.3s; }
+.nh-book__page:nth-of-type(3) { animation-delay: 0.6s; }
+@keyframes nh-flip {
+  0%, 12% { transform: rotateY(0deg); opacity: 1; }
+  60% { transform: rotateY(-180deg); opacity: 1; }
+  80%, 100% { transform: rotateY(-180deg); opacity: 0; }
+}
+
+.nh-loader-fade { opacity: 0; animation: nh-fade-in 0.35s ease-out forwards; }
+@keyframes nh-fade-in { to { opacity: 1; } }
+
+.nh-progress {
+  position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 200; overflow: hidden;
+  pointer-events: none; opacity: 0; transition: opacity 0.25s ease;
+}
+.nh-progress--on { opacity: 1; }
+.nh-progress::before {
+  content: ''; position: absolute; inset: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, #5aaff8, #22d3ee, transparent);
+  animation: nh-indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes nh-indeterminate { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+/* the same bar inside a box (search suggestions, explore search): put it in a relative parent */
+.nh-loadbar { position: absolute; left: 0; right: 0; height: 2px; overflow: hidden; pointer-events: none; }
+.nh-loadbar::before { content: ''; position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, #5aaff8, #22d3ee, transparent); animation: nh-indeterminate 1.2s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nh-book__page { animation: nh-soft-pulse 1.6s ease-in-out infinite; transform: rotateY(-40deg); }
+  .nh-progress::before, .nh-loadbar::before { animation: nh-soft-pulse 1.6s ease-in-out infinite; width: 100%; }
+  @keyframes nh-soft-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+  body::before, .hero-kenburns, .ws-stream::before { animation: none; }
+  .hero-slide, .hero-layer-near, .tile, .tile__img, .reveal-up, .hero-slide .rise { transition-duration: 0.01ms !important; }
+}
+
+/* ---------- Story case opening (CS2-style random) ---------- */
+.case-item { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06); transition: transform 0.4s ease, box-shadow 0.4s ease; }
+.case-item--win {
+  transform: scale(1.06);
+  box-shadow: inset 0 0 0 2px var(--tier), 0 0 28px -2px var(--tier);
+  animation: case-win-pulse 1.4s ease-in-out infinite;
+}
+@keyframes case-win-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 2px var(--tier), 0 0 18px -2px var(--tier); }
+  50% { box-shadow: inset 0 0 0 2px var(--tier), 0 0 38px 2px var(--tier); }
+}
+.case-reveal {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--tier) 22%, #121417), #121417 65%);
+  animation: case-reveal-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes case-reveal-in { from { opacity: 0; transform: translateY(14px) scale(0.97); } to { opacity: 1; transform: none; } }
+.case-reveal__rays {
+  background: repeating-conic-gradient(from 0deg at 15% 50%, color-mix(in srgb, var(--tier) 18%, transparent) 0deg 8deg, transparent 8deg 22deg);
+  mask-image: radial-gradient(circle at 15% 50%, #000 0%, transparent 60%);
+  -webkit-mask-image: radial-gradient(circle at 15% 50%, #000 0%, transparent 60%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .case-item--win, .case-reveal { animation: none; }
+}
+
+/* ---------- Chapter reader text ---------- */
+.reader-text {
+  font-optical-sizing: auto;
+  font-kerning: normal;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-wrap: break-word;
+  hyphens: manual;
+}
+
+/* ---------- Novel chapter formatting: chapter editor (.chapter-ck) and reader (.chapter-rich) ----------
+   Only classes come from the editor, so every colour here follows the reader theme (light / sepia / dark). */
+.chapter-rich { overflow-wrap: anywhere; }
+.chapter-rich > * + *, .chapter-rich blockquote > * + * { margin-top: 0.75em; }
+.chapter-rich h2, .chapter-ck .ck-content h2 { font-size: 1.5em; font-weight: 800; line-height: 1.3; margin: 0.6em 0 0.2em; }
+.chapter-rich h3, .chapter-ck .ck-content h3 { font-size: 1.25em; font-weight: 700; line-height: 1.35; margin: 0.5em 0 0.2em; }
+.chapter-rich h4, .chapter-ck .ck-content h4 { font-size: 1.08em; font-weight: 700; margin: 0.4em 0 0.1em; }
+.chapter-rich strong, .chapter-rich b { font-weight: 700; }
+.chapter-rich em, .chapter-rich i { font-style: italic; }
+.chapter-rich u { text-decoration: underline; text-underline-offset: 3px; }
+.chapter-rich s, .chapter-rich strike { text-decoration: line-through; }
+.chapter-rich sub, .chapter-rich sup { font-size: 0.72em; line-height: 0; position: relative; }
+.chapter-rich sup { vertical-align: super; }
+.chapter-rich sub { vertical-align: sub; }
+.chapter-rich ul { list-style: disc; padding-left: 1.6em; }
+.chapter-rich ol { list-style: decimal; padding-left: 1.6em; }
+.chapter-rich li + li { margin-top: 0.3em; }
+.chapter-rich a { color: rgb(var(--c-brand-400)); text-decoration: underline; text-underline-offset: 2px; }
+.chapter-rich blockquote, .chapter-ck .ck-content blockquote {
+  border-left: 3px solid rgb(var(--c-brand-400) / 0.6);
+  padding: 0.2em 0 0.2em 1em;
+  font-style: italic;
+  opacity: 0.92;
+}
+/* scene break */
+.chapter-rich hr, .chapter-ck .ck-content hr {
+  border: 0; height: auto; background: none; margin: 1.6em 0; text-align: center; overflow: visible;
+}
+.chapter-rich hr::before, .chapter-ck .ck-content hr::before {
+  content: '✦ ✦ ✦'; letter-spacing: 0.6em; opacity: 0.5; font-size: 0.85em;
+}
+.nh-align-left { text-align: left !important; }
+.nh-align-center { text-align: center !important; }
+.nh-align-right { text-align: right !important; }
+.nh-align-justify { text-align: justify !important; }
+/* named font sizes, relative to the reader's own size */
+.chapter-rich .text-tiny, .chapter-ck .ck-content .text-tiny { font-size: 0.7em; }
+.chapter-rich .text-small, .chapter-ck .ck-content .text-small { font-size: 0.85em; }
+.chapter-rich .text-big, .chapter-ck .ck-content .text-big { font-size: 1.4em; }
+.chapter-rich .text-huge, .chapter-ck .ck-content .text-huge { font-size: 1.8em; }
+/* highlights: soft on light pages, translucent on dark ones so the text stays readable */
+.chapter-rich mark, .chapter-ck .ck-content mark { color: inherit; border-radius: 3px; padding: 0 0.12em; }
+.chapter-rich .marker-yellow, .chapter-ck .ck-content .marker-yellow { background: #fef08a; }
+.chapter-rich .marker-green, .chapter-ck .ck-content .marker-green { background: #bbf7d0; }
+.chapter-rich .marker-pink, .chapter-ck .ck-content .marker-pink { background: #fbcfe8; }
+.chapter-rich .marker-blue, .chapter-ck .ck-content .marker-blue { background: #bfdbfe; }
+.chapter-rich .pen-red, .chapter-ck .ck-content .pen-red { background: transparent; color: #dc2626; }
+.chapter-rich .pen-green, .chapter-ck .ck-content .pen-green { background: transparent; color: #16a34a; }
+.dark .chapter-rich .marker-yellow, .dark .chapter-ck .ck-content .marker-yellow { background: rgb(250 204 21 / 0.32); }
+.dark .chapter-rich .marker-green, .dark .chapter-ck .ck-content .marker-green { background: rgb(74 222 128 / 0.28); }
+.dark .chapter-rich .marker-pink, .dark .chapter-ck .ck-content .marker-pink { background: rgb(244 114 182 / 0.3); }
+.dark .chapter-rich .marker-blue, .dark .chapter-ck .ck-content .marker-blue { background: rgb(96 165 250 / 0.3); }
+.dark .chapter-rich .pen-red, .dark .chapter-ck .ck-content .pen-red { color: #fb7185; }
+.dark .chapter-rich .pen-green, .dark .chapter-ck .ck-content .pen-green { color: #4ade80; }
+/* illustrations */
+.chapter-rich figure.image { margin: 1.5em auto; text-align: center; max-width: 100%; }
+.chapter-rich figure.image img {
+  max-width: 100%; max-height: 85vh; width: auto; height: auto; margin: 0 auto; display: block;
+  border-radius: 10px; box-shadow: 0 18px 40px -20px rgb(0 0 0 / 0.6);
+}
+.chapter-rich figure.image_resized img { width: 100%; max-height: none; }
+.chapter-rich figure.image figcaption { margin-top: 0.6em; font-size: 0.8em; font-style: italic; opacity: 0.7; font-family: Inter, sans-serif; }
+/* the chapter editor reads like the page it produces */
+.chapter-ck .ck-content { font-family: 'Literata', 'Noto Serif', serif; font-size: 17px; line-height: 1.8; }
+.chapter-ck .ck-content p { margin: 0 0 0.9em; }
+.chapter-ck .ck.ck-editor__editable_inline { max-height: 75vh; overflow-y: auto; }
+.chapter-ck .ck-content ul, .chapter-ck .ck-content ol { padding-left: 1.6em; margin: 0 0 0.9em; }
+
+/* ---------- Reading extras: ruby, emphasis dots, tables, footnotes, translator messages, illustrations ---------- */
+.chapter-rich ruby { ruby-position: over; ruby-align: center; }
+.chapter-rich rt { font-size: 0.55em; opacity: 0.85; letter-spacing: 0.02em; }
+.chapter-rich .nh-dots { font-style: normal; text-emphasis: filled dot; -webkit-text-emphasis: filled dot; text-emphasis-position: over right; -webkit-text-emphasis-position: over; }
+/* tables (status windows, item lists...) */
+.chapter-rich figure.table, .chapter-ck .ck-content figure.table { margin: 1.2em auto; display: table; max-width: 100%; overflow-x: auto; }
+.chapter-rich table, .chapter-ck .ck-content table {
+  border-collapse: separate; border-spacing: 0; min-width: min(100%, 22em); font-size: 0.92em; line-height: 1.5;
+  border: 1px solid rgb(var(--c-brand-400) / 0.45); border-radius: 10px; overflow: hidden;
+  background: rgb(var(--c-brand-400) / 0.07);
+}
+.chapter-rich th, .chapter-rich td, .chapter-ck .ck-content th, .chapter-ck .ck-content td {
+  padding: 0.45em 0.8em; border-bottom: 1px solid rgb(var(--c-brand-400) / 0.18); text-align: left; vertical-align: top;
+}
+.chapter-rich tr:last-child > td, .chapter-rich tr:last-child > th { border-bottom: 0; }
+.chapter-rich th, .chapter-ck .ck-content th { font-weight: 700; background: rgb(var(--c-brand-400) / 0.14); }
+/* first-line indent (reader setting); centred / right lines, headings and lists are left alone */
+.nh-indent .chapter-rich p:not(.nh-align-center):not(.nh-align-right) { text-indent: 2em; }
+.nh-indent .chapter-rich blockquote p, .nh-indent .chapter-rich li p, .nh-indent .chapter-rich td p { text-indent: 0; }
+/* illustrations: click to enlarge; hidden by the reader -> a placeholder that still opens it */
+.chapter-rich figure.image img, .nh-illus img { cursor: zoom-in; }
+.nh-illus { margin: 1.5em auto; text-align: center; }
+.nh-illus img { max-width: 100%; max-height: 85vh; width: auto; height: auto; margin: 0 auto; display: block; border-radius: 10px; box-shadow: 0 18px 40px -20px rgb(0 0 0 / 0.6); }
+.nh-hide-images .chapter-rich figure.image img, .nh-hide-images .nh-illus img { display: none; }
+.nh-hide-images .chapter-rich figure.image, .nh-hide-images .nh-illus {
+  cursor: pointer; padding: 0.9em 1em; border: 1px dashed rgb(var(--c-white) / 0.25); border-radius: 10px;
+  font-family: Inter, sans-serif; font-size: 0.8em; opacity: 0.8;
+}
+.nh-hide-images .chapter-rich figure.image::before, .nh-hide-images .nh-illus::before { content: '🖼  Ảnh minh họa đã ẩn — bấm để xem'; }
+.nh-hide-images .chapter-rich figure.image figcaption { margin-top: 0.3em; }
+/* numbered translator notes */
+.nh-fn { font-size: 0.7em; line-height: 0; margin-left: 0.15em; font-family: Inter, sans-serif; }
+.nh-fn a { color: rgb(var(--c-amber-400)); text-decoration: none; font-weight: 700; cursor: pointer; }
+.nh-fn a:hover { text-decoration: underline; }
+.nh-note {
+  padding: 0.7em 0.9em; border-radius: 10px; border-left: 3px solid rgb(var(--c-amber-400));
+  background: rgb(var(--c-amber-400) / 0.1); font-family: Inter, sans-serif; font-size: 0.8em; line-height: 1.6; text-align: left;
+}
+.nh-note__head { display: flex; justify-content: space-between; font-weight: 700; color: rgb(var(--c-amber-400)); margin-bottom: 0.25em; font-size: 0.9em; }
+.nh-footnotes { padding-top: 1em; border-top: 1px solid rgb(var(--c-white) / 0.12); font-family: Inter, sans-serif; font-size: 0.8em; line-height: 1.6; text-align: left; }
+.nh-footnotes h2 { font-weight: 800; font-size: 1em; margin-bottom: 0.5em; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.8; }
+.nh-footnotes ol { list-style: decimal; padding-left: 1.6em; }
+.nh-footnotes li + li { margin-top: 0.4em; }
+.nh-footnotes li:target { background: rgb(var(--c-amber-400) / 0.12); border-radius: 6px; }
+.nh-footnotes__back { color: rgb(var(--c-amber-400)); font-weight: 700; padding: 0 0.3em; }
+/* translator message before / after the chapter */
+.nh-message {
+  padding: 0.9em 1.1em; border-radius: 12px; border: 1px solid rgb(var(--c-brand-400) / 0.3);
+  background: rgb(var(--c-brand-400) / 0.07); font-family: Inter, sans-serif; font-size: 0.85em; line-height: 1.65; text-align: left;
+}
+.nh-message__label { display: flex; align-items: center; gap: 0.4em; font-weight: 800; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.05em; color: rgb(var(--c-brand-400)); margin-bottom: 0.35em; }
+
+/* Phone: a long chapter (90k+ px) was re-laid out on every scroll step. Off-screen blocks now skip layout and paint. */
+@media (max-width: 1023.98px) {
+  .reader-text > * {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 96px;
+  }
+}
+
+/* Phone, chapter page: still backdrop (aura and skin ornaments stop moving while reading) */
+@media (max-width: 1023.98px) {
+  html[data-reader] body::before,
+  html[data-reader].skin-aemeath *::before,
+  html[data-reader].skin-aemeath *::after { animation: none; }
+}
